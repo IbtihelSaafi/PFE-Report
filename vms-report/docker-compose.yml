@@ -1,0 +1,58 @@
+version: '3.9'
+
+services:
+  vms_app:
+    build: .
+    container_name: vms_app
+    ports:
+      - "5000:5000"
+    environment:
+      - DATABASE_URL=postgresql://vms_user:vms_password@vms_db/vms_db
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      vms_db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
+  vms_db:
+    image: postgres:16-alpine
+    container_name: vms_db
+    environment:
+      POSTGRES_USER: vms_user
+      POSTGRES_PASSWORD: vms_password
+      POSTGRES_DB: vms_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vms_user -d vms_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vms_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  ollama_models:

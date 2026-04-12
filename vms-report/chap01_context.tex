@@ -1,0 +1,143 @@
+%============================================================
+%  Chapter 1 — General Context
+%============================================================
+\chapter{General Context}
+\label{chap:context}
+
+\section{Introduction}
+
+The increasing sophistication and frequency of cyberattacks have made vulnerability management a cornerstone of modern information security practice. Organizations of all sizes are confronted with the challenge of continuously discovering, assessing, and remediating security weaknesses across their digital infrastructure. Without systematic management, critical vulnerabilities remain unaddressed, creating windows of opportunity for adversaries.
+
+This chapter presents the general context of our end-of-study project: a web-based Vulnerability Management System (VMS) developed at the Institut Supérieur d'Informatique de l'Ariana. We begin by introducing the hosting organization, then analyze existing solutions, identify their limitations, and conclude by presenting our proposed solution and its objectives.
+
+\section{Hosting Organization — ISI Ariana}
+
+The Institut Supérieur d'Informatique de l'Ariana (ISI Ariana) is a public higher education institution located in Ariana, Tunisia, operating under the Ministry of Higher Education and Scientific Research. Founded as part of Tunisia's national strategy to develop ICT competencies, ISI Ariana offers engineering and bachelor programs in computer science, networks, and information systems.
+
+The institution provides students with a rigorous academic foundation combined with practical project experience, including industry-supervised end-of-study projects. ISI Ariana's modern computing labs and network infrastructure served as the test environment for this project, hosting three AlmaLinux virtual machines used for vulnerability scanning.
+
+\section{Study and Critique of Existing Solutions}
+
+\subsection{Tenable Nessus}
+
+Tenable Nessus~\cite{tenable2024} is one of the world's most widely deployed vulnerability scanners, used by over 30,000 organizations globally. It performs comprehensive network scanning to detect known CVEs, misconfigurations, and compliance violations. Nessus produces detailed findings with CVSS scores, plugin descriptions, and remediation guidance.
+
+\textbf{Strengths:}
+\begin{itemize}
+  \item Comprehensive plugin library (over 175,000 plugins)
+  \item Accurate detection with low false-positive rates
+  \item CVSS v3 scoring integration
+  \item Well-documented REST API for integration
+\end{itemize}
+
+\textbf{Limitations:}
+\begin{itemize}
+  \item The Nessus interface lacks workflow management capabilities
+  \item No built-in SLA enforcement or overdue tracking
+  \item No assignment of findings to individual team members
+  \item No AI-assisted remediation guidance
+  \item Findings from multiple scans accumulate without deduplication
+\end{itemize}
+
+\subsection{Qualys Vulnerability Management}
+
+Qualys~\cite{qualys2024} provides cloud-based vulnerability management with broad asset coverage. Its VMDR (Vulnerability Management, Detection, and Response) platform includes orchestration capabilities and integrates with ticketing systems.
+
+\textbf{Strengths:} Cloud scalability, compliance reporting, patch management integration.
+
+\textbf{Limitations:} High cost (\$10,000--\$50,000/year), data leaves the organization's network, complex configuration, no local LLM integration.
+
+\subsection{OpenVAS / Greenbone}
+
+OpenVAS~\cite{openvas2024} is an open-source vulnerability scanner that provides a free alternative to commercial tools. Greenbone's commercial offerings extend OpenVAS with management interfaces.
+
+\textbf{Strengths:} Free and open-source, large community, NVT feed.
+
+\textbf{Limitations:} Greenbone's web interface remains basic, no SLA management, no AI features, performance is inferior to Nessus for large networks.
+
+\subsection{Comparative Analysis}
+
+\begin{table}[H]
+\centering
+\caption{Comparison of Existing Vulnerability Management Solutions}
+\label{tab:solution-comparison}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Feature} & \textbf{Nessus} & \textbf{Qualys} & \textbf{OpenVAS} & \textbf{Our VMS} \\
+\midrule
+Scanning Engine & \checkmark & \checkmark & \checkmark & Via Nessus API \\
+SLA Enforcement & $\times$ & Partial & $\times$ & \checkmark \\
+Finding Assignment & $\times$ & \checkmark & $\times$ & \checkmark \\
+AI Remediation & $\times$ & $\times$ & $\times$ & \checkmark \\
+Local LLM & $\times$ & $\times$ & $\times$ & \checkmark \\
+Deduplication & Partial & \checkmark & $\times$ & \checkmark \\
+Risk Acceptance & $\times$ & \checkmark & $\times$ & \checkmark \\
+Open Source & $\times$ & $\times$ & \checkmark & \checkmark \\
+Cost & Medium & High & Free & Free \\
+Data Privacy & On-prem & Cloud & On-prem & On-prem \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Problem Statement and Identified Gaps}
+
+Based on our analysis of existing solutions, several critical gaps exist that our system aims to address:
+
+\begin{importantbox}
+\textbf{Key Gap 1 — Workflow Management:} Vulnerability scanners produce findings but do not manage their remediation lifecycle. Security teams have no visibility into who is responsible for fixing what, and by when.
+
+\textbf{Key Gap 2 — SLA Enforcement:} No existing free solution enforces time-based remediation deadlines aligned with vulnerability severity. Critical vulnerabilities may sit unaddressed for months.
+
+\textbf{Key Gap 3 — AI-Assisted Remediation:} Teams often struggle to interpret technical vulnerability descriptions. No open-source VMS provides contextual AI remediation guidance while keeping data on-premises.
+
+\textbf{Key Gap 4 — Finding Deduplication:} Repeated scans produce duplicate entries that inflate finding counts and create confusion about the actual attack surface.
+\end{importantbox}
+
+\section{Proposed Solution}
+
+The proposed Vulnerability Management System (VMS) is a web-based application developed with Python/Flask that acts as a layer above Tenable Nessus, transforming raw scan results into a managed, workflow-driven remediation process. Key capabilities include:
+
+\begin{itemize}
+  \item \textbf{Nessus Integration:} Automated import of findings via the Tenable REST API
+  \item \textbf{Lifecycle Management:} Multi-state workflow (NEW $\rightarrow$ ASSIGNED $\rightarrow$ IN\_PROGRESS $\rightarrow$ REMEDIATED $\rightarrow$ VERIFIED $\rightarrow$ CLOSED)
+  \item \textbf{SLA Enforcement:} Automatic deadline calculation and overdue detection per severity
+  \item \textbf{Local AI Support:} Ollama/Mistral integration for on-premises remediation guidance
+  \item \textbf{Smart Deduplication:} Composite key (asset\_id + plugin\_id + port + protocol) prevents duplicate findings
+  \item \textbf{Automated Notifications:} Email alerts for assignment, overdue, and risk acceptance events
+\end{itemize}
+
+\section{Project Objectives}
+
+The primary objectives of this project are:
+
+\begin{enumerate}
+  \item Design and implement a complete vulnerability management workflow covering the full finding lifecycle
+  \item Integrate with Tenable Nessus API to automate vulnerability data ingestion
+  \item Implement SLA-based remediation tracking with automated overdue detection
+  \item Deploy a local LLM (Ollama/Mistral 7B) for privacy-preserving AI remediation assistance
+  \item Build a multi-role access control system supporting Security Analysts, Sysadmins, Managers, and Administrators
+  \item Validate the system against a realistic lab environment with real vulnerability data
+  \item Demonstrate measurable performance improvements over manual processes
+\end{enumerate}
+
+\section{Methodological Choices}
+
+\subsection{Development Methodology}
+
+We adopted an \textbf{Agile/iterative} development approach organized into four sprints of approximately three weeks each, aligned with the four chapters of this report. This allowed for progressive feature delivery and continuous feedback integration.
+
+\subsection{Technology Philosophy}
+
+Three guiding principles shaped our technology choices:
+
+\begin{keybox}
+\textbf{Principle 1 — Open Source First:} All components (Flask, PostgreSQL, Ollama) are open-source, ensuring no licensing costs and full transparency.
+
+\textbf{Principle 2 — Data Privacy by Design:} The Ollama LLM runs entirely locally. No vulnerability data ever leaves the organization's network, addressing a key concern in security tooling.
+
+\textbf{Principle 3 — API-First Architecture:} The VMS exposes clean REST endpoints, enabling future integration with ticketing systems (JIRA, ServiceNow) and SIEM platforms.
+\end{keybox}
+
+\section{Summary}
+
+This chapter established the context for our project by analyzing the vulnerability management landscape and identifying critical gaps in existing solutions. The proposed VMS fills these gaps through a combination of automated Nessus integration, SLA enforcement, multi-role workflow management, and privacy-preserving local LLM support. The following chapters present the detailed requirements analysis, technical design, and implementation results.

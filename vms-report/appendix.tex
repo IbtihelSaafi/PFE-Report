@@ -1,0 +1,310 @@
+%============================================================
+%  Appendix
+%============================================================
+\chapter{Complete SQL Schema}
+\label{app:sql}
+
+The following SQL script creates the complete VMS database schema including all tables, constraints, indexes, and default data:
+
+\begin{lstlisting}[style=sql, caption={Complete VMS Database Schema}, label={lst:fullsql}]
+-- VMS Database Schema v1.0
+-- Author: Ibtihel SAAFI — ISI Ariana 2025-2026
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Users table
+CREATE TABLE users (
+    id          SERIAL PRIMARY KEY,
+    username    VARCHAR(80)  UNIQUE NOT NULL,
+    email       VARCHAR(120) UNIQUE NOT NULL,
+    password    VARCHAR(256) NOT NULL,
+    role        VARCHAR(30)  NOT NULL
+                CHECK (role IN ('analyst','sysadmin','manager','admin')),
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    last_login  TIMESTAMP
+);
+
+-- Assets table
+CREATE TABLE assets (
+    id          SERIAL PRIMARY KEY,
+    ip_address  INET NOT NULL UNIQUE,
+    hostname    VARCHAR(255),
+    os          VARCHAR(120),
+    asset_type  VARCHAR(50),
+    description TEXT,
+    owner_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP DEFAULT NOW()
+);
+
+-- Applications table
+CREATE TABLE applications (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(150) NOT NULL,
+    description TEXT,
+    version     VARCHAR(50),
+    env         VARCHAR(30) CHECK (env IN ('dev','staging','production')),
+    owner_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TIMESTAMP DEFAULT NOW()
+);
+
+-- SLA Policy table
+CREATE TABLE sla_policy (
+    id              SERIAL PRIMARY KEY,
+    severity        VARCHAR(20) UNIQUE NOT NULL,
+    days_to_fix     INTEGER NOT NULL,
+    warn_at_percent INTEGER DEFAULT 50,
+    is_active       BOOLEAN DEFAULT TRUE,
+    updated_at      TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO sla_policy (severity, days_to_fix) VALUES
+    ('Critical', 7), ('High', 15), ('Medium', 30), ('Low', 60);
+
+-- Findings table (central entity)
+CREATE TABLE findings (
+    id              SERIAL PRIMARY KEY,
+    asset_id        INTEGER NOT NULL REFERENCES assets(id),
+    application_id  INTEGER REFERENCES applications(id),
+    plugin_id       INTEGER NOT NULL,
+    plugin_name     VARCHAR(500) NOT NULL,
+    severity        VARCHAR(20) NOT NULL
+                    CHECK (severity IN ('Critical','High','Medium','Low','Info')),
+    cvss_score      NUMERIC(4,1),
+    cve_ids         TEXT[],
+    description     TEXT,
+    solution        TEXT,
+    port            INTEGER DEFAULT 0,
+    protocol        VARCHAR(10) DEFAULT '/',
+    status          VARCHAR(30) NOT NULL DEFAULT 'NEW'
+                    CHECK (status IN ('NEW','ASSIGNED','IN_PROGRESS',
+                           'REMEDIATED','VERIFIED','CLOSED',
+                           'FALSE_POSITIVE','ACCEPTED_RISK')),
+    assigned_to_id  INTEGER REFERENCES users(id),
+    due_date        TIMESTAMP,
+    first_seen      TIMESTAMP NOT NULL DEFAULT NOW(),
+    last_seen       TIMESTAMP NOT NULL DEFAULT NOW(),
+    remediation_note TEXT,
+    UNIQUE (asset_id, plugin_id, port, protocol)
+);
+
+CREATE INDEX idx_findings_severity  ON findings(severity);
+CREATE INDEX idx_findings_status    ON findings(status);
+CREATE INDEX idx_findings_due_date  ON findings(due_date);
+CREATE INDEX idx_findings_asset_id  ON findings(asset_id);
+CREATE INDEX idx_findings_assigned  ON findings(assigned_to_id);
+
+-- Risk Acceptances table
+CREATE TABLE risk_acceptances (
+    id              SERIAL PRIMARY KEY,
+    finding_id      INTEGER NOT NULL REFERENCES findings(id),
+    requested_by_id INTEGER NOT NULL REFERENCES users(id),
+    reviewed_by_id  INTEGER REFERENCES users(id),
+    status          VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+                    CHECK (status IN ('PENDING','APPROVED','REJECTED')),
+    justification   TEXT NOT NULL,
+    review_note     TEXT,
+    requested_at    TIMESTAMP DEFAULT NOW(),
+    reviewed_at     TIMESTAMP
+);
+
+-- Notifications table
+CREATE TABLE notifications (
+    id              SERIAL PRIMARY KEY,
+    finding_id      INTEGER REFERENCES findings(id),
+    recipient_id    INTEGER REFERENCES users(id),
+    type            VARCHAR(30) NOT NULL
+                    CHECK (type IN ('ASSIGNED','OVERDUE','HALF_SLA',
+                           'UNMAPPED_FINDINGS','RISK_ACCEPTANCE_REQUEST')),
+    message         TEXT,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    is_read         BOOLEAN DEFAULT FALSE
+);
+
+-- Email Deliveries table
+CREATE TABLE email_deliveries (
+    id              SERIAL PRIMARY KEY,
+    notification_id INTEGER NOT NULL REFERENCES notifications(id),
+    recipient_email VARCHAR(120) NOT NULL,
+    subject         VARCHAR(250),
+    status          VARCHAR(20) DEFAULT 'PENDING'
+                    CHECK (status IN ('PENDING','SENT','FAILED')),
+    sent_at         TIMESTAMP,
+    error_message   TEXT,
+    retry_count     INTEGER DEFAULT 0
+);
+
+-- Scan Import Runs table
+CREATE TABLE scan_import_runs (
+    id              SERIAL PRIMARY KEY,
+    triggered_by_id INTEGER REFERENCES users(id),
+    status          VARCHAR(20) DEFAULT 'RUNNING'
+                    CHECK (status IN ('RUNNING','SUCCESS','FAILED')),
+    total_fetched   INTEGER DEFAULT 0,
+    new_findings    INTEGER DEFAULT 0,
+    updated_findings INTEGER DEFAULT 0,
+    error_message   TEXT,
+    started_at      TIMESTAMP DEFAULT NOW(),
+    completed_at    TIMESTAMP
+);
+
+-- Asset-Application Ownership junction table
+CREATE TABLE asset_app_ownership (
+    id              SERIAL PRIMARY KEY,
+    asset_id        INTEGER NOT NULL REFERENCES assets(id),
+    application_id  INTEGER NOT NULL REFERENCES applications(id),
+    owner_id        INTEGER NOT NULL REFERENCES users(id),
+    assigned_at     TIMESTAMP DEFAULT NOW(),
+    UNIQUE (asset_id, application_id)
+);
+\end{lstlisting}
+
+%------------------------------------------------------------
+\chapter{API Endpoints Documentation}
+\label{app:api}
+
+\begin{table}[H]
+\centering
+\caption{VMS REST API Endpoints}
+\label{tab:api}
+\begin{tabularx}{\linewidth}{llXl}
+\toprule
+\textbf{Method} & \textbf{Endpoint} & \textbf{Description} & \textbf{Role} \\
+\midrule
+GET & /dashboard & Main dashboard & All \\
+GET & /findings & Findings list with filters & All \\
+GET & /findings/\{id\} & Finding detail page & All \\
+POST & /findings/\{id\}/status & Update finding status & Sysadmin+ \\
+POST & /findings/import & Trigger Nessus import & Analyst \\
+POST & /api/ollama/chat & Ollama AI chat & All \\
+GET & /risk-acceptances & List pending requests & Manager \\
+POST & /risk-acceptances/\{id\}/approve & Approve request & Manager \\
+POST & /risk-acceptances/\{id\}/reject & Reject request & Manager \\
+GET & /admin/users & User management & Admin \\
+POST & /admin/users/create & Create user & Admin \\
+GET & /admin/sla & SLA policy config & Admin \\
+POST & /admin/sla/update & Update SLA policy & Admin \\
+GET & /admin/assets & Asset management & Admin \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%------------------------------------------------------------
+\chapter{Environment Configuration Template}
+\label{app:env}
+
+\begin{lstlisting}[style=bash, caption={.env Configuration Template}, label={lst:env}]
+# ── Database ──────────────────────────────────────────────
+DATABASE_URL=postgresql://vms_user:strong_password@localhost/vms_db
+DATABASE_POOL_SIZE=10
+DATABASE_MAX_OVERFLOW=20
+
+# ── Flask ─────────────────────────────────────────────────
+SECRET_KEY=your-very-long-random-secret-key-here-min-32-chars
+FLASK_ENV=production
+DEBUG=False
+WTF_CSRF_ENABLED=True
+
+# ── Tenable Nessus API ────────────────────────────────────
+NESSUS_URL=https://your-nessus-server:8834
+NESSUS_ACCESS_KEY=your_access_key
+NESSUS_SECRET_KEY=your_secret_key
+NESSUS_VERIFY_SSL=False
+
+# ── Ollama LLM ────────────────────────────────────────────
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=mistral
+OLLAMA_TIMEOUT=120
+
+# ── Email (SMTP) ──────────────────────────────────────────
+MAIL_SERVER=smtp.yourcompany.com
+MAIL_PORT=587
+MAIL_USE_TLS=True
+MAIL_USERNAME=vms@yourcompany.com
+MAIL_PASSWORD=email_password
+MAIL_DEFAULT_SENDER=VMS Alerts <vms@yourcompany.com>
+
+# ── SLA Scheduler ─────────────────────────────────────────
+SLA_CHECK_INTERVAL_HOURS=6
+\end{lstlisting}
+
+%------------------------------------------------------------
+\chapter{Installation Guide}
+\label{app:install}
+
+\section*{Linux/macOS Installation}
+
+\begin{lstlisting}[style=bash, caption={VMS Installation Steps}, label={lst:install}]
+# 1. Clone the repository
+git clone https://github.com/bahagmar/Vulnerability-Management-Tool.git
+cd Vulnerability-Management-Tool
+
+# 2. Create virtual environment
+python3.11 -m venv venv
+source venv/bin/activate
+
+# 3. Install Python dependencies
+pip install -r requirements.txt
+
+# 4. Install and start PostgreSQL
+sudo apt install postgresql-16
+sudo systemctl start postgresql
+sudo -u postgres psql -c "CREATE USER vms_user WITH PASSWORD 'secure_pass';"
+sudo -u postgres psql -c "CREATE DATABASE vms_db OWNER vms_user;"
+
+# 5. Configure environment
+cp .env.example .env
+# Edit .env with your settings
+
+# 6. Initialize database
+flask db upgrade
+flask db seed  # Creates default admin user
+
+# 7. Install and configure Ollama
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull mistral
+systemctl enable --now ollama
+
+# 8. Run the application
+flask run --host=0.0.0.0 --port=5000
+\end{lstlisting}
+
+\section*{Docker Deployment}
+
+\begin{lstlisting}[style=bash, caption={Docker Compose Deployment}, label={lst:docker}]
+# docker-compose.yml provides all services
+docker compose up -d
+
+# Services started:
+#   - vms_app (Flask application, port 5000)
+#   - vms_db  (PostgreSQL 16, port 5432)
+#   - ollama  (Ollama runtime, port 11434)
+
+# Check status
+docker compose ps
+docker compose logs -f vms_app
+\end{lstlisting}
+
+%------------------------------------------------------------
+\chapter{Glossary}
+\label{app:glossary}
+
+\begin{description}
+  \item[\textbf{CVSS}] Common Vulnerability Scoring System — standardized framework for rating the severity of security vulnerabilities from 0.0 to 10.0
+  \item[\textbf{CVE}] Common Vulnerabilities and Exposures — public catalog of known security vulnerabilities maintained by MITRE
+  \item[\textbf{SLA}] Service Level Agreement — contractual or policy-defined remediation deadline based on vulnerability severity
+  \item[\textbf{LLM}] Large Language Model — AI model trained on large text corpora capable of generating human-like text responses
+  \item[\textbf{Ollama}] Open-source runtime for running LLMs locally without cloud dependencies
+  \item[\textbf{Mistral 7B}] Open-weight language model with 7 billion parameters, balancing quality and resource requirements
+  \item[\textbf{ORM}] Object-Relational Mapping — technique for accessing relational databases using object-oriented programming paradigms
+  \item[\textbf{REST}] Representational State Transfer — architectural style for distributed hypermedia systems
+  \item[\textbf{SSE}] Server-Sent Events — web standard for pushing data from server to client over HTTP
+  \item[\textbf{RBAC}] Role-Based Access Control — authorization method restricting system access based on user roles
+  \item[\textbf{Deduplication}] Process of detecting and merging duplicate vulnerability findings using a composite identifier key
+  \item[\textbf{Composite Key}] Combination of multiple columns used to uniquely identify a record: (asset\_id, plugin\_id, port, protocol)
+  \item[\textbf{SLA Breach}] Event occurring when a finding's due date passes without reaching REMEDIATED or CLOSED status
+  \item[\textbf{Risk Acceptance}] Formal business decision to acknowledge a vulnerability without immediate remediation, documented with justification
+  \item[\textbf{Plugin}] Nessus detection script that identifies a specific vulnerability pattern; each plugin has a unique integer ID
+  \item[\textbf{Finding}] Individual security vulnerability detected by Nessus on a specific asset, port, and protocol combination
+\end{description}

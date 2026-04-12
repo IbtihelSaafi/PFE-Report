@@ -1,0 +1,39 @@
+# LaTeX auxiliary files
+*.aux
+*.log
+*.toc
+*.lof
+*.lot
+*.out
+*.bbl
+*.blg
+*.gls
+*.glo
+*.glg
+*.acn
+*.acr
+*.alg
+*.ist
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.idx
+*.ilg
+*.ind
+*.nav
+*.snm
+*.vrb
+
+# Generated PDF (optional — remove this line to track the PDF)
+# main.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db

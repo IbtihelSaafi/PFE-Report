@@ -1,0 +1,35 @@
+%--- Abstract ---
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+\thispagestyle{plain}
+
+\textbf{Title:} Vulnerability Management System (VMS) — Web-Based Vulnerability Management with Tenable Nessus Integration and Local LLM Support
+
+\textbf{Author:} Ibtihel SAAFI \hfill \textbf{Institution:} ISI Ariana \hfill \textbf{Year:} 2025--2026
+
+\vspace{0.5em}
+\noindent\rule{\linewidth}{0.5pt}
+\vspace{0.3em}
+
+\textbf{English Abstract:}
+
+This report presents the design, implementation, and evaluation of a web-based Vulnerability Management System (VMS) developed as an end-of-study project at the Institut Supérieur d'Informatique de l'Ariana. The system addresses critical gaps in existing vulnerability management workflows by providing an integrated platform that automates the lifecycle of security findings from detection to closure.
+
+The VMS integrates with Tenable Nessus via its REST API to import and deduplicate vulnerability findings across networked assets. A 10-table PostgreSQL database underpins the system, managed through a Flask application with SQLAlchemy ORM. The system enforces SLA-based remediation deadlines (Critical: 7 days, High: 15 days, Medium: 30 days, Low: 60 days) and automates stakeholder notifications via email.
+
+A key innovation of this project is the integration of Ollama running the Mistral 7B model for context-aware remediation suggestions. Unlike cloud-based AI solutions, this approach operates entirely on-premises, preserving data confidentiality. The system was validated against a lab environment of three AlmaLinux virtual machines, yielding 131 detected vulnerabilities across five severity levels.
+
+\textbf{Keywords:} vulnerability management, Tenable Nessus, Ollama, LLM, Flask, PostgreSQL, SLA, cybersecurity, remediation
+
+\vspace{0.8em}
+\noindent\rule{\linewidth}{0.5pt}
+\vspace{0.3em}
+
+\textbf{Résumé:}
+
+Ce rapport présente la conception, l'implémentation et l'évaluation d'un Système de Gestion des Vulnérabilités (VMS) basé sur le web, développé dans le cadre d'un projet de fin d'études à l'Institut Supérieur d'Informatique de l'Ariana. Le système comble des lacunes critiques dans les workflows existants de gestion des vulnérabilités en fournissant une plateforme intégrée qui automatise le cycle de vie des findings de sécurité, de la détection à la clôture.
+
+Le VMS s'intègre à Tenable Nessus via son API REST pour importer et dédupliquer les vulnérabilités à travers les actifs réseau. Une base de données PostgreSQL à 10 tables constitue le socle du système, géré par une application Flask avec l'ORM SQLAlchemy. L'innovation clé est l'intégration d'Ollama avec le modèle Mistral 7B pour des suggestions de remédiation contextualisées, sans recours au cloud.
+
+\textbf{Mots-clés:} gestion des vulnérabilités, Tenable Nessus, Ollama, LLM, Flask, PostgreSQL, SLA, cybersécurité
+\cleardoublepage
