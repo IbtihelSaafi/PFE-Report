@@ -139,7 +139,7 @@ CREATE TABLE users (
     email VARCHAR(255) UNIQUE NOT NULL,
     full_name VARCHAR(255),
     password_hash VARCHAR(255) NOT NULL,
-    role VARCHAR(20) NOT NULL DEFAULT 'user',
+    role VARCHAR(20) NOT NULL DEFAULT 'user', -- user | admin
     active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
@@ -168,7 +168,7 @@ CREATE TABLE findings (
     last_seen TIMESTAMP NOT NULL,
     due_date TIMESTAMP,
     assigned_to_user_id INTEGER REFERENCES users(id),
-    UNIQUE (asset_id, plugin_id, port, protocol)
+    UNIQUE (asset_id, plugin_id, port, protocol) -- dedup key for re-imports
 );
 
 CREATE TABLE asset_app_ownership (
@@ -274,6 +274,7 @@ def import_tenable_rows(rows: list[dict], sla_days_map: dict):
     """
     Upsert findings using dedup key:
     (asset_id, plugin_id, port, protocol)
+    sla_days_map format: {"Critical": 7, "High": 15, ...}
     """
     now = datetime.utcnow()
     created = updated = skipped = new_assets = 0
@@ -379,7 +380,7 @@ def _call_ollama_generate(app: Flask, prompt: str) -> str:
 The SLA engine runs as a scheduled background task, checking all non-closed findings against their due dates:
 
 \begin{lstlisting}[style=python, caption={SLA Monitoring Service}, label={lst:slaengine}]
-def _half_sla_point(finding):
+def _compute_half_sla_timestamp(finding):
     if finding.first_seen is None or finding.due_date is None:
         return None
     if finding.due_date <= finding.first_seen:
@@ -393,14 +394,14 @@ def send_half_sla_reminders(app):
     sent = 0
 
     for finding in findings:
-        half_point = _half_sla_point(finding)
+        half_point = _compute_half_sla_timestamp(finding)
         if half_point is None:
             continue
         if not (half_point <= now < finding.due_date):
             continue
         if finding.status not in {"NEW", "IN_PROGRESS", "ASSIGNED"}:
             continue
-        # send reminder and write Notification + EmailDelivery logs
+        # _send_half_sla_one is defined in app.py and logs Notification + EmailDelivery
         sent += _send_half_sla_one(app, finding)
     return sent
 \end{lstlisting}
