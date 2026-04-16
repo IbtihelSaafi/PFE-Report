@@ -44,7 +44,7 @@ Python 3.11 was chosen as the primary programming language for its rich ecosyste
 Key Flask extensions used:
 \begin{itemize}
   \item \textbf{Flask-SQLAlchemy}: ORM integration for database access
-  \item \textbf{Werkzeug security helpers}: password hashing and verification
+  \item \textbf{Werkzeug security helpers}: \texttt{generate\_password\_hash} and \texttt{check\_password\_hash}
   \item \textbf{Jinja2}: server-side rendering for dashboard and administration views
   \item \textbf{Built-in session middleware}: role-based access with route decorators
   \item \textbf{SMTP services}: notification delivery and audit logging in \texttt{email\_deliveries}
@@ -449,7 +449,7 @@ The VMS uses Flask session-based authentication with explicit route decorators a
 
 \begin{itemize}
   \item \textbf{Password Hashing}: bcrypt with cost factor 12 (approximately 200ms per hash)
-  \item \textbf{Session Security}: server-side role checks with authenticated session IDs
+  \item \textbf{Session Security}: signed Flask session cookies with server-side role verification on protected routes
   \item \textbf{Role Enforcement}: \texttt{@login\_required} and \texttt{@admin\_required} decorators on restricted routes
   \item \textbf{Least Privilege}: finding-level authorization (owner or admin) on remediation and risk actions
 \end{itemize}
