@@ -35,6 +35,8 @@ This repository contains the complete LaTeX source for the VMS end-of-study proj
 ```
 main.tex                  ← Main document (compile this)
 cover.tex                 ← Title page
+cover_black.tex           ← Black separator cover (ISI-style)
+signatures.tex            ← Signature approval page
 dedication.tex            ← Dedication
 acknowledgments.tex       ← Acknowledgments
 abstract.tex              ← Abstract (EN + FR)

@@ -44,10 +44,10 @@ Python 3.11 was chosen as the primary programming language for its rich ecosyste
 Key Flask extensions used:
 \begin{itemize}
   \item \textbf{Flask-SQLAlchemy}: ORM integration for database access
-  \item \textbf{Flask-Login}: Session management and authentication
-  \item \textbf{Flask-Mail}: Email notification delivery via SMTP
-  \item \textbf{Flask-WTF}: Form handling and CSRF protection
-  \item \textbf{Flask-Migrate}: Database schema migration management
+  \item \textbf{Werkzeug security helpers}: \texttt{generate\_password\_hash} and \texttt{check\_password\_hash}
+  \item \textbf{Jinja2}: server-side rendering for dashboard and administration views
+  \item \textbf{Built-in session middleware}: role-based access with route decorators
+  \item \textbf{SMTP services}: notification delivery and audit logging in \texttt{email\_deliveries}
 \end{itemize}
 
 \subsection{Database: PostgreSQL}
@@ -92,27 +92,26 @@ The presentation tier consists of Jinja2-rendered HTML templates styled with Boo
 The Flask application handles routing, business logic, and service orchestration. The application is organized into logical modules:
 
 \begin{lstlisting}[style=python, caption={Application Module Structure}, label={lst:structure}]
-vms/
-├── app.py                 # Application factory and route handlers
-├── models.py              # SQLAlchemy model definitions (10 tables)
+vulnerability-management-tool/
+├── app.py                    # Flask app factory + routes + Ollama chat endpoint
+├── models.py                 # SQLAlchemy model definitions (10 tables)
+├── tenable_importer.py       # Deduplicating upsert for normalized Tenable rows
+├── nessus_importer.py        # .nessus XML importer
 ├── services/
-│   ├── scan_import.py     # Tenable Nessus API integration
-│   ├── ollama_service.py  # Ollama LLM chat interface
-│   ├── email_service.py   # Email notification delivery
-│   ├── sla_service.py     # SLA calculation and overdue detection
-│   └── risk_service.py    # Risk acceptance workflow
-├── templates/             # Jinja2 HTML templates
-│   ├── base.html
-│   ├── dashboard.html
-│   ├── findings/
-│   └── admin/
-└── static/                # CSS, JS, images
+│   ├── tenable_client.py     # Tenable API export/details/download client
+│   ├── assignment.py         # Auto-mapping and assignment logic
+│   ├── sla.py                # compute_due_date helper
+│   └── mailer.py             # SMTP sender utility
+├── templates/                # Jinja2 HTML templates
+└── static/                   # CSS, JS, images
 \end{lstlisting}
 
 \subsection{Data Tier}
 The data tier consists of a PostgreSQL database accessed exclusively through SQLAlchemy ORM. Ollama models are stored locally in the \texttt{/root/.ollama/models} directory on the application server.
 
 \section{Component Diagram}
+
+The component decomposition is complemented by the additional UML static and dynamic views introduced in Chapter~\ref{chap:requirements} (Figures~\ref{fig:uml-static} and~\ref{fig:uml-dynamic}).
 
 \begin{figure}[H]
 \centering
@@ -132,190 +131,99 @@ The data tier consists of a PostgreSQL database accessed exclusively through SQL
 
 \subsection{Table Definitions}
 
-\subsubsection{users}
-Stores all authenticated users of the VMS application.
+The implementation uses SQLAlchemy models. The following schema snapshot reflects the latest structures in \texttt{models.py}.
 
-\begin{lstlisting}[style=sql, caption={users table DDL}, label={lst:users}]
+\begin{lstlisting}[style=sql, caption={Database schema aligned with implementation}, label={lst:schema-current}]
 CREATE TABLE users (
-    id          SERIAL PRIMARY KEY,
-    username    VARCHAR(80)  UNIQUE NOT NULL,
-    email       VARCHAR(120) UNIQUE NOT NULL,
-    password    VARCHAR(256) NOT NULL,       -- bcrypt hash
-    role        VARCHAR(30)  NOT NULL        -- analyst|sysadmin|manager|admin
-                CHECK (role IN ('analyst','sysadmin','manager','admin')),
-    is_active   BOOLEAN DEFAULT TRUE,
-    created_at  TIMESTAMP DEFAULT NOW(),
-    last_login  TIMESTAMP
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    full_name VARCHAR(255),
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL DEFAULT 'user', -- user | admin
+    active BOOLEAN NOT NULL DEFAULT TRUE
 );
-\end{lstlisting}
 
-\subsubsection{assets}
-Represents network-connected hosts scanned by Nessus.
-
-\begin{lstlisting}[style=sql, caption={assets table DDL}, label={lst:assets}]
 CREATE TABLE assets (
-    id          SERIAL PRIMARY KEY,
-    ip_address  INET NOT NULL UNIQUE,
-    hostname    VARCHAR(255),
-    os          VARCHAR(120),
-    asset_type  VARCHAR(50),    -- server|workstation|network_device|vm
-    description TEXT,
-    owner_id    INTEGER REFERENCES users(id),
-    created_at  TIMESTAMP DEFAULT NOW(),
-    updated_at  TIMESTAMP DEFAULT NOW()
+    id SERIAL PRIMARY KEY,
+    ip VARCHAR(64) UNIQUE NOT NULL,
+    hostname VARCHAR(255)
 );
-\end{lstlisting}
 
-\subsubsection{applications}
-Represents software applications or services mapped to assets.
-
-\begin{lstlisting}[style=sql, caption={applications table DDL}, label={lst:apps}]
 CREATE TABLE applications (
-    id          SERIAL PRIMARY KEY,
-    name        VARCHAR(150) NOT NULL,
-    description TEXT,
-    version     VARCHAR(50),
-    env         VARCHAR(30)  -- dev|staging|production
-                CHECK (env IN ('dev','staging','production')),
-    owner_id    INTEGER REFERENCES users(id),
-    created_at  TIMESTAMP DEFAULT NOW()
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) UNIQUE NOT NULL
 );
-\end{lstlisting}
 
-\subsubsection{findings}
-The central table of the VMS, representing individual vulnerability findings.
-
-\begin{lstlisting}[style=sql, caption={findings table DDL}, label={lst:findings}]
 CREATE TABLE findings (
-    id              SERIAL PRIMARY KEY,
-    asset_id        INTEGER NOT NULL REFERENCES assets(id),
-    application_id  INTEGER REFERENCES applications(id),
-    plugin_id       INTEGER NOT NULL,
-    plugin_name     VARCHAR(500) NOT NULL,
-    severity        VARCHAR(20) NOT NULL
-                    CHECK (severity IN ('Critical','High','Medium','Low','Info')),
-    cvss_score      NUMERIC(4,1),
-    cve_ids         TEXT[],            -- Array of CVE identifiers
-    description     TEXT,
-    solution        TEXT,
-    port            INTEGER DEFAULT 0,
-    protocol        VARCHAR(10) DEFAULT '/',
-    status          VARCHAR(30) NOT NULL DEFAULT 'NEW'
-                    CHECK (status IN ('NEW','ASSIGNED','IN_PROGRESS',
-                                      'REMEDIATED','VERIFIED','CLOSED',
-                                      'FALSE_POSITIVE','ACCEPTED_RISK')),
-    assigned_to_id  INTEGER REFERENCES users(id),
-    due_date        TIMESTAMP,
-    first_seen      TIMESTAMP NOT NULL DEFAULT NOW(),
-    last_seen       TIMESTAMP NOT NULL DEFAULT NOW(),
-    remediation_note TEXT,
-    UNIQUE (asset_id, plugin_id, port, protocol)  -- Deduplication key
+    id SERIAL PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES assets(id),
+    application_id INTEGER REFERENCES applications(id),
+    plugin_id INTEGER NOT NULL,
+    plugin_name VARCHAR(500) NOT NULL,
+    severity VARCHAR(20) NOT NULL,
+    port INTEGER NOT NULL DEFAULT 0,
+    protocol VARCHAR(20) NOT NULL DEFAULT '',
+    status VARCHAR(30) NOT NULL DEFAULT 'NEW',
+    first_seen TIMESTAMP NOT NULL,
+    last_seen TIMESTAMP NOT NULL,
+    due_date TIMESTAMP,
+    assigned_to_user_id INTEGER REFERENCES users(id),
+    UNIQUE (asset_id, plugin_id, port, protocol) -- dedup key for re-imports
 );
 
-CREATE INDEX idx_findings_severity ON findings(severity);
-CREATE INDEX idx_findings_status   ON findings(status);
-CREATE INDEX idx_findings_due_date ON findings(due_date);
-CREATE INDEX idx_findings_asset_id ON findings(asset_id);
-\end{lstlisting}
-
-\subsubsection{risk\_acceptances}
-Manages the formal risk acceptance approval workflow.
-
-\begin{lstlisting}[style=sql, caption={risk\_acceptances table DDL}, label={lst:risk}]
-CREATE TABLE risk_acceptances (
-    id              SERIAL PRIMARY KEY,
-    finding_id      INTEGER NOT NULL REFERENCES findings(id),
-    requested_by_id INTEGER NOT NULL REFERENCES users(id),
-    reviewed_by_id  INTEGER REFERENCES users(id),
-    status          VARCHAR(20) NOT NULL DEFAULT 'PENDING'
-                    CHECK (status IN ('PENDING','APPROVED','REJECTED')),
-    justification   TEXT NOT NULL,
-    review_note     TEXT,
-    requested_at    TIMESTAMP DEFAULT NOW(),
-    reviewed_at     TIMESTAMP
-);
-\end{lstlisting}
-
-\subsubsection{sla\_policy}
-Configurable SLA definitions by severity level.
-
-\begin{lstlisting}[style=sql, caption={sla\_policy table DDL}, label={lst:sla}]
-CREATE TABLE sla_policy (
-    id              SERIAL PRIMARY KEY,
-    severity        VARCHAR(20) UNIQUE NOT NULL,
-    days_to_fix     INTEGER NOT NULL,  -- Calendar days for remediation
-    warn_at_percent INTEGER DEFAULT 50, -- % elapsed before warning email
-    is_active       BOOLEAN DEFAULT TRUE,
-    updated_at      TIMESTAMP DEFAULT NOW()
-);
-
-INSERT INTO sla_policy (severity, days_to_fix) VALUES
-  ('Critical', 7), ('High', 15), ('Medium', 30), ('Low', 60);
-\end{lstlisting}
-
-\subsubsection{notifications}
-Log of all notification events generated by the system.
-
-\begin{lstlisting}[style=sql, caption={notifications table DDL}, label={lst:notif}]
-CREATE TABLE notifications (
-    id              SERIAL PRIMARY KEY,
-    finding_id      INTEGER REFERENCES findings(id),
-    recipient_id    INTEGER REFERENCES users(id),
-    type            VARCHAR(30) NOT NULL
-                    CHECK (type IN ('ASSIGNED','OVERDUE','HALF_SLA',
-                                    'UNMAPPED_FINDINGS','RISK_ACCEPTANCE_REQUEST')),
-    message         TEXT,
-    created_at      TIMESTAMP DEFAULT NOW(),
-    is_read         BOOLEAN DEFAULT FALSE
-);
-\end{lstlisting}
-
-\subsubsection{email\_deliveries}
-Tracks email notification delivery for audit and retry purposes.
-
-\begin{lstlisting}[style=sql, caption={email\_deliveries table DDL}, label={lst:email}]
-CREATE TABLE email_deliveries (
-    id              SERIAL PRIMARY KEY,
-    notification_id INTEGER NOT NULL REFERENCES notifications(id),
-    recipient_email VARCHAR(120) NOT NULL,
-    subject         VARCHAR(250),
-    status          VARCHAR(20) DEFAULT 'PENDING'
-                    CHECK (status IN ('PENDING','SENT','FAILED')),
-    sent_at         TIMESTAMP,
-    error_message   TEXT,
-    retry_count     INTEGER DEFAULT 0
-);
-\end{lstlisting}
-
-\subsubsection{scan\_import\_runs}
-Audit log of every Nessus scan import operation.
-
-\begin{lstlisting}[style=sql, caption={scan\_import\_runs table DDL}, label={lst:scanimport}]
-CREATE TABLE scan_import_runs (
-    id              SERIAL PRIMARY KEY,
-    triggered_by_id INTEGER REFERENCES users(id),
-    status          VARCHAR(20) DEFAULT 'RUNNING'
-                    CHECK (status IN ('RUNNING','SUCCESS','FAILED')),
-    total_fetched   INTEGER DEFAULT 0,
-    new_findings    INTEGER DEFAULT 0,
-    updated_findings INTEGER DEFAULT 0,
-    error_message   TEXT,
-    started_at      TIMESTAMP DEFAULT NOW(),
-    completed_at    TIMESTAMP
-);
-\end{lstlisting}
-
-\subsubsection{asset\_app\_ownership}
-Junction table mapping assets to applications and their owners.
-
-\begin{lstlisting}[style=sql, caption={asset\_app\_ownership table DDL}, label={lst:ownership}]
 CREATE TABLE asset_app_ownership (
-    id              SERIAL PRIMARY KEY,
-    asset_id        INTEGER NOT NULL REFERENCES assets(id),
-    application_id  INTEGER NOT NULL REFERENCES applications(id),
-    owner_id        INTEGER NOT NULL REFERENCES users(id),
-    assigned_at     TIMESTAMP DEFAULT NOW(),
+    id SERIAL PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES assets(id),
+    application_id INTEGER NOT NULL REFERENCES applications(id),
+    owner_user_id INTEGER NOT NULL REFERENCES users(id),
     UNIQUE (asset_id, application_id)
+);
+
+CREATE TABLE sla_policy (
+    severity VARCHAR(20) PRIMARY KEY,
+    days INTEGER
+);
+
+CREATE TABLE notifications (
+    id SERIAL PRIMARY KEY,
+    finding_id INTEGER NOT NULL REFERENCES findings(id),
+    type VARCHAR(30) NOT NULL,
+    sent_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE email_deliveries (
+    id SERIAL PRIMARY KEY,
+    recipient_email VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    error_message TEXT,
+    sent_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE risk_acceptances (
+    id SERIAL PRIMARY KEY,
+    finding_id INTEGER NOT NULL REFERENCES findings(id),
+    requested_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    requested_at TIMESTAMP NOT NULL,
+    reason TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    approved_by_user_id INTEGER REFERENCES users(id),
+    reviewed_at TIMESTAMP,
+    admin_comments TEXT
+);
+
+CREATE TABLE scan_import_runs (
+    id SERIAL PRIMARY KEY,
+    source VARCHAR(50) NOT NULL DEFAULT 'tenable',
+    scan_id INTEGER,
+    status VARCHAR(30) NOT NULL DEFAULT 'STARTED',
+    created_count INTEGER NOT NULL DEFAULT 0,
+    updated_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    new_assets_count INTEGER NOT NULL DEFAULT 0,
+    started_at TIMESTAMP NOT NULL,
+    finished_at TIMESTAMP,
+    error_message TEXT
 );
 \end{lstlisting}
 
@@ -362,68 +270,63 @@ CLOSED & NEW & Re-detected in subsequent scan \\
 \end{figure}
 
 \begin{lstlisting}[style=python, caption={Scan Import Core Logic}, label={lst:import}]
-def import_nessus_findings(run_id: int) -> dict:
+def import_tenable_rows(rows: list[dict], sla_days_map: dict):
     """
-    Fetch findings from Tenable API and upsert into database.
-    Returns summary statistics.
+    Upsert findings using dedup key:
+    (asset_id, plugin_id, port, protocol)
+    sla_days_map format: {"Critical": 7, "High": 15, ...}
     """
-    headers = {
-        "X-ApiKeys": f"accessKey={NESSUS_ACCESS_KEY}; secretKey={NESSUS_SECRET_KEY}",
-        "Accept": "application/json"
-    }
-    
-    # Fetch scan list, then fetch vulnerabilities per scan
-    response = requests.get(f"{NESSUS_URL}/scans", headers=headers, verify=False)
-    scans = response.json()["scans"]
-    
-    new_count = 0
-    updated_count = 0
-    
-    for scan in scans:
-        scan_id = scan["id"]
-        vulns = requests.get(
-            f"{NESSUS_URL}/scans/{scan_id}",
-            headers=headers, verify=False
-        ).json().get("vulnerabilities", [])
-        
-        for vuln in vulns:
-            # Build composite deduplication key
-            asset = get_or_create_asset(vuln["hostname"], vuln["host_id"])
-            composite = {
-                "asset_id": asset.id,
-                "plugin_id": vuln["plugin_id"],
-                "port": vuln.get("port", 0),
-                "protocol": vuln.get("protocol", "/")
-            }
-            
-            existing = Finding.query.filter_by(**composite).first()
-            
-            if existing:
-                existing.last_seen = datetime.utcnow()
-                existing.cvss_score = vuln.get("severity")
-                updated_count += 1
-            else:
-                # Calculate SLA due date
-                sla = SLAPolicy.query.filter_by(
-                    severity=map_severity(vuln["severity"])
-                ).first()
-                due = datetime.utcnow() + timedelta(days=sla.days_to_fix)
-                
-                finding = Finding(
-                    **composite,
-                    plugin_name=vuln["plugin_name"],
-                    severity=map_severity(vuln["severity"]),
-                    cvss_score=vuln.get("severity"),
-                    description=vuln.get("description", ""),
-                    solution=vuln.get("solution", ""),
-                    due_date=due,
-                    status="NEW"
-                )
-                db.session.add(finding)
-                new_count += 1
-    
+    now = datetime.utcnow()
+    created = updated = skipped = new_assets = 0
+
+    for row in rows:
+        ip = str(row.get("ip", "")).strip()
+        plugin_name = str(row.get("plugin_name", "")).strip()
+        plugin_id_raw = row.get("plugin_id")
+        if not ip or plugin_id_raw is None or not plugin_name:
+            skipped += 1
+            continue
+
+        plugin_id = int(plugin_id_raw)
+        port = int(row.get("port", 0) or 0)
+        protocol = str(row.get("protocol", "")).strip().lower()
+        severity = _severity_to_text(row.get("severity"))
+
+        asset = db.session.query(Asset).filter_by(ip=ip).first()
+        if not asset:
+            asset = Asset(ip=ip)
+            db.session.add(asset)
+            db.session.flush()
+            new_assets += 1
+
+        existing = db.session.query(Finding).filter_by(
+            asset_id=asset.id, plugin_id=plugin_id, port=port, protocol=protocol
+        ).first()
+
+        if existing:
+            existing.last_seen = now
+            existing.plugin_name = plugin_name
+            existing.severity = severity
+            updated += 1
+        else:
+            finding = Finding(
+                asset_id=asset.id,
+                application_id=None,
+                plugin_id=plugin_id,
+                plugin_name=plugin_name,
+                severity=severity,
+                port=port,
+                protocol=protocol,
+                status="NEW",
+                first_seen=now,
+                last_seen=now,
+            )
+            finding.due_date = compute_due_date(now, severity, sla_days_map)
+            db.session.add(finding)
+            created += 1
+
     db.session.commit()
-    return {"new": new_count, "updated": updated_count}
+    return created, updated, skipped, new_assets
 \end{lstlisting}
 
 \subsection{Ollama LLM Integration}
@@ -437,60 +340,39 @@ def import_nessus_findings(run_id: int) -> dict:
 
 The Ollama integration is the most innovative aspect of this project. The system constructs a context-rich prompt for each user question, ensuring the AI has full awareness of the specific vulnerability being discussed.
 
-\begin{lstlisting}[style=python, caption={Ollama Service — Context-Aware Prompting}, label={lst:ollama}]
-class OllamaService:
-    """
-    Manages communication with local Ollama instance for
-    context-aware vulnerability remediation assistance.
-    """
-    OLLAMA_URL = "http://localhost:11434/api/chat"
-    MODEL = "mistral"
-    
-    SYSTEM_PROMPT = """You are a Tenable vulnerability remediation expert.
-When a user shares a vulnerability finding, you must:
-1. Explain what the vulnerability is and why it is dangerous
-2. Rate its severity and provide CVSS context
-3. Provide step-by-step remediation commands appropriate for the OS
-4. Suggest validation steps to confirm the fix worked
-5. Recommend rollback steps if the fix causes issues
-Be concise, technical, and practical. Use command blocks for CLI instructions."""
+\begin{lstlisting}[style=python, caption={Ollama Integration (Current Implementation)}, label={lst:ollama}]
+def _build_ollama_prompt(system_prompt: str, history: list, message: str) -> str:
+    lines = [system_prompt, "", "Conversation:"]
+    for item in history[-10:]:
+        role = str(item.get("role") or "").strip().lower()
+        text = str(item.get("content") or "").strip()
+        if role == "user" and text:
+            lines.append(f"User: {text}")
+        elif role == "assistant" and text:
+            lines.append(f"Assistant: {text}")
+    if message:
+        lines.append(f"User: {message}")
+    lines.append("Assistant:")
+    return "\n".join(lines)
 
-    @classmethod
-    def build_context_prompt(cls, finding: Finding, user_message: str) -> list:
-        """Build full conversation context including finding metadata."""
-        system_context = f"""{cls.SYSTEM_PROMPT}
 
-=== CURRENT FINDING CONTEXT ===
-Finding ID:    #{finding.id}
-Plugin:        {finding.plugin_id} — {finding.plugin_name}
-Severity:      {finding.severity} (CVSS: {finding.cvss_score})
-Asset IP:      {finding.asset.ip_address}
-Asset OS:      {finding.asset.os or 'Unknown'}
-Port/Protocol: {finding.port}/{finding.protocol}
-CVEs:          {', '.join(finding.cve_ids or []) or 'None listed'}
-Status:        {finding.status}
-Due Date:      {finding.due_date.strftime('%Y-%m-%d') if finding.due_date else 'No SLA'}
-Description:   {(finding.description or '')[:500]}
-"""
-        return [
-            {"role": "system", "content": system_context},
-            {"role": "user", "content": user_message}
-        ]
-
-    @classmethod
-    def chat(cls, finding: Finding, user_message: str,
-             history: list = None) -> str:
-        """Send message to Ollama and return streamed response."""
-        messages = cls.build_context_prompt(finding, user_message)
-        if history:
-            messages = messages[:1] + history + messages[1:]
-        
-        response = requests.post(
-            cls.OLLAMA_URL,
-            json={"model": cls.MODEL, "messages": messages, "stream": False},
-            timeout=120
-        )
-        return response.json()["message"]["content"]
+def _call_ollama_generate(app: Flask, prompt: str) -> str:
+    endpoint = f"{app.config['OLLAMA_BASE_URL'].rstrip('/')}/api/generate"
+    payload = {
+        "model": app.config.get("OLLAMA_MODEL", "mistral"),
+        "prompt": prompt,
+        "stream": False,
+        "temperature": float(app.config.get("OLLAMA_TEMPERATURE", 0.7)),
+    }
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return str(data.get("response") or "").strip()
 \end{lstlisting}
 
 \subsection{SLA Engine}
@@ -498,123 +380,102 @@ Description:   {(finding.description or '')[:500]}
 The SLA engine runs as a scheduled background task, checking all non-closed findings against their due dates:
 
 \begin{lstlisting}[style=python, caption={SLA Monitoring Service}, label={lst:slaengine}]
-def check_sla_compliance():
-    """
-    Scheduled job: scan all active findings for SLA breaches.
-    Sends OVERDUE and HALF_SLA notifications.
-    """
-    now = datetime.utcnow()
-    
-    active_statuses = ['NEW', 'ASSIGNED', 'IN_PROGRESS']
-    findings = Finding.query.filter(
-        Finding.status.in_(active_statuses),
-        Finding.due_date.isnot(None)
-    ).all()
-    
+def _compute_half_sla_timestamp(finding):
+    if finding.first_seen is None or finding.due_date is None:
+        return None
+    if finding.due_date <= finding.first_seen:
+        return None
+    return finding.first_seen + ((finding.due_date - finding.first_seen) / 2)
+
+
+def send_half_sla_reminders(app):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    findings = db.session.query(Finding).filter(Finding.due_date.isnot(None)).all()
+    sent = 0
+
     for finding in findings:
-        sla = SLAPolicy.query.filter_by(severity=finding.severity).first()
-        total_days = timedelta(days=sla.days_to_fix)
-        elapsed = now - finding.first_seen
-        
-        # Check for overdue
-        if now > finding.due_date:
-            notify_if_not_exists(
-                finding, NotificationType.OVERDUE,
-                f"Finding #{finding.id} is OVERDUE by "
-                f"{(now - finding.due_date).days} days"
-            )
-        
-        # Check for half-SLA warning
-        elif elapsed >= total_days * (sla.warn_at_percent / 100):
-            notify_if_not_exists(
-                finding, NotificationType.HALF_SLA,
-                f"Finding #{finding.id} has consumed "
-                f"{sla.warn_at_percent}% of its SLA window"
-            )
+        half_point = _compute_half_sla_timestamp(finding)
+        if half_point is None:
+            continue
+        if not (half_point <= now < finding.due_date):
+            continue
+        if finding.status not in {"NEW", "IN_PROGRESS", "ASSIGNED"}:
+            continue
+        # _send_half_sla_one is defined in app.py and logs Notification + EmailDelivery
+        sent += _send_half_sla_one(app, finding)
+    return sent
 \end{lstlisting}
 
 \subsection{Email Notification Service}
 
 \begin{lstlisting}[style=python, caption={Email Notification Dispatch}, label={lst:email}]
-def send_notification(notification: Notification) -> bool:
-    """
-    Send email for a notification event and log delivery.
-    """
-    subject_map = {
-        'ASSIGNED':                '[VMS] Finding Assigned to You',
-        'OVERDUE':                 '[VMS] URGENT: Finding Overdue',
-        'HALF_SLA':                '[VMS] SLA Warning — Action Required',
-        'UNMAPPED_FINDINGS':       '[VMS] Unmapped Findings Detected',
-        'RISK_ACCEPTANCE_REQUEST': '[VMS] Risk Acceptance Request Pending',
-    }
-    
-    delivery = EmailDelivery(
-        notification_id=notification.id,
-        recipient_email=notification.recipient.email,
-        subject=subject_map.get(notification.type, '[VMS] Notification'),
-        status='PENDING'
-    )
-    db.session.add(delivery)
-    
+def send_finding_reminder(app, user, finding, subject, body):
+    recipients = _resolve_recipients(app, [user.email])
+    delivery = EmailDelivery()
+    delivery.recipient_email = ", ".join(recipients)
+    delivery.subject = subject
+    delivery.sent_at = datetime.utcnow()
+
     try:
-        msg = Message(
-            subject=delivery.subject,
-            recipients=[delivery.recipient_email],
-            html=render_template(
-                f'emails/{notification.type.lower()}.html',
-                notification=notification
-            )
+        send_plain_email(
+            smtp_host=app.config["SMTP_HOST"],
+            smtp_port=app.config["SMTP_PORT"],
+            smtp_username=app.config["SMTP_USERNAME"],
+            smtp_password=app.config["SMTP_PASSWORD"],
+            smtp_use_tls=app.config["SMTP_USE_TLS"],
+            sender=app.config["SMTP_FROM"],
+            recipients=recipients,
+            subject=subject,
+            body=body,
         )
-        mail.send(msg)
-        delivery.status = 'SENT'
-        delivery.sent_at = datetime.utcnow()
-        db.session.commit()
-        return True
+        delivery.status = "SENT"
+        delivery.error_message = None
     except Exception as e:
-        delivery.status = 'FAILED'
+        delivery.status = "FAILED"
         delivery.error_message = str(e)
-        delivery.retry_count += 1
+        db.session.add(delivery)
         db.session.commit()
-        return False
+        raise
+
+    db.session.add(delivery)
+    db.session.commit()
 \end{lstlisting}
 
 \section{Security Architecture}
 
 \subsection{Authentication and Authorization}
 
-The VMS uses Flask-Login for session management with the following security measures:
+The VMS uses Flask session-based authentication with explicit route decorators and the following security measures:
 
 \begin{itemize}
   \item \textbf{Password Hashing}: bcrypt with cost factor 12 (approximately 200ms per hash)
-  \item \textbf{Session Security}: HTTPOnly and Secure cookie flags; 8-hour session expiry
-  \item \textbf{CSRF Protection}: Flask-WTF CSRF tokens on all POST forms
-  \item \textbf{Role Enforcement}: Custom \texttt{@role\_required} decorator on all restricted routes
+  \item \textbf{Session Security}: signed Flask session cookies with server-side role verification on protected routes
+  \item \textbf{Role Enforcement}: \texttt{@login\_required} and \texttt{@admin\_required} decorators on restricted routes
+  \item \textbf{Least Privilege}: finding-level authorization (owner or admin) on remediation and risk actions
 \end{itemize}
 
 \begin{lstlisting}[style=python, caption={Role-Based Access Control Decorator}, label={lst:rbac}]
 from functools import wraps
-from flask_login import current_user
-from flask import abort
+from flask import session, redirect, url_for, flash
 
-def role_required(*roles):
-    """Decorator to restrict endpoint access by user role."""
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            if not current_user.is_authenticated:
-                return redirect(url_for('login'))
-            if current_user.role not in roles:
-                abort(403)
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
+def login_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect(url_for("login"))
+        return fn(*args, **kwargs)
+    return wrapper
 
-# Usage example:
-@app.route('/admin/users')
-@role_required('admin')
-def manage_users():
-    users = User.query.all()
-    return render_template('admin/users.html', users=users)
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        uid = session.get("user_id")
+        user = db.session.get(User, uid) if uid else None
+        if not user or user.role != "admin":
+            flash("Admin access required.", "error")
+            return redirect(url_for("dashboard"))
+        return fn(*args, **kwargs)
+    return wrapper
 \end{lstlisting}
 
 \section{Summary}
